@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>M5StickC Plus 2 BLE Controller</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .container {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+        .control-panel {
+            border: 1px solid #ccc;
+            padding: 20px;
+            border-radius: 8px;
+            background-color: #f9f9f9;
+        }
+        .button-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 10px;
+            margin-top: 20px;
+        }
+        button {
+            padding: 12px;
+            font-size: 16px;
+            cursor: pointer;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 5px;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        button:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+        #connect {
+            background-color: #2196F3;
+        }
+        #connect:hover {
+            background-color: #0b7dda;
+        }
+        .status {
+            padding: 10px;
+            margin-top: 10px;
+            border-radius: 5px;
+        }
+        .connected {
+            background-color: #d4edda;
+            color: #155724;
+        }
+        .disconnected {
+            background-color: #f8d7da;
+            color: #721c24;
+        }
+        .log-panel {
+            height: 200px;
+            overflow-y: auto;
+            border: 1px solid #ccc;
+            padding: 10px;
+            border-radius: 5px;
+            background-color: #f5f5f5;
+        }
+        .display-panel {
+            min-height: 100px;
+            border: 1px solid #ccc;
+            padding: 10px;
+            border-radius: 5px;
+            background-color: black;
+            color: white;
+            font-family: monospace;
+        }
+        .btn-group {
+            display: flex;
+            justify-content: space-between;
+            margin-top: 10px;
+        }
+        .button-A, .button-B, .button-C {
+            flex-grow: 1;
+            margin: 0 5px;
+        }
+        .button-A {
+            background-color: #ff6b6b;
+        }
+        .button-B {
+            background-color: #339af0;
+        }
+        .button-C {
+            background-color: #6741d9;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>M5StickC Plus 2 BLE Controller</h1>
+        
+        <div class="control-panel">
+            <h2>Connection</h2>
+            <div id="statusDisplay" class="status disconnected">Disconnected</div>
+            <div class="btn-group">
+                <button id="connect">Connect via Bluetooth</button>
+                <button id="disconnect" disabled>Disconnect</button>
+            </div>
+        </div>
+        
+        <div class="control-panel">
+            <h2>Device Display</h2>
+            <div id="displayPanel" class="display-panel">Display content will appear here...</div>
+        </div>
+        
+        <div class="control-panel">
+            <h2>Controls</h2>
+            <div class="btn-group">
+                <button class="button-A" id="buttonA" disabled>Button A</button>
+                <button class="button-B" id="buttonB" disabled>Button B</button>
+                <button class="button-C" id="buttonC" disabled>Button C</button>
+            </div>
+            
+            <div class="button-grid">
+                <button id="ledOn" disabled>LED On</button>
+                <button id="ledOff" disabled>LED Off</button>
+                <button id="getInfo" disabled>Get Device Info</button>
+                <button id="clearDisplay" disabled>Clear Display</button>
+            </div>
+            
+            <div style="margin-top: 20px;">
+                <input type="text" id="messageInput" placeholder="Type message to display..." style="width: 70%; padding: 10px;">
+                <button id="sendMessage" disabled>Send</button>
+            </div>
+        </div>
+        
+        <div class="control-panel">
+            <h2>Device Logs</h2>
+            <div id="logPanel" class="log-panel"></div>
+        </div>
+    </div>
+
+    <script>
+        // BLE UUIDs - these should match the ones defined in the MicroPython code
+        const SERVICE_UUID = '6E400001-B5A3-F393-E0A9-E50E24DCCA9E';
+        const RX_CHARACTERISTIC_UUID = '6E400002-B5A3-F393-E0A9-E50E24DCCA9E'; // for writing to the device
+        const TX_CHARACTERISTIC_UUID = '6E400003-B5A3-F393-E0A9-E50E24DCCA9E'; // for receiving from the device
+        
+        // BLE objects
+        let device = null;
+        let server = null;
+        let service = null;
+        let rxCharacteristic = null;
+        let txCharacteristic = null;
+        
+        // UI elements
+        const connectButton = document.getElementById('connect');
+        const disconnectButton = document.getElementById('disconnect');
+        const statusDisplay = document.getElementById('statusDisplay');
+        const logPanel = document.getElementById('logPanel');
+        const displayPanel = document.getElementById('displayPanel');
+        const buttonA = document.getElementById('buttonA');
+        const buttonB = document.getElementById('buttonB');
+        const buttonC = document.getElementById('buttonC');
+        const ledOnButton = document.getElementById('ledOn');
+        const ledOffButton = document.getElementById('ledOff');
+        const getInfoButton = document.getElementById('getInfo');
+        const clearDisplayButton = document.getElementById('clearDisplay');
+        const messageInput = document.getElementById('messageInput');
+        const sendMessageButton = document.getElementById('sendMessage');
+        
+        // Add log entry
+        function log(message) {
+            const entry = document.createElement('div');
+            entry.textContent = `${new Date().toLocaleTimeString()}: ${message}`;
+            logPanel.appendChild(entry);
+            logPanel.scrollTop = logPanel.scrollHeight;
+        }
+        
+        // Update UI when connected/disconnected
+        function updateUI(connected) {
+            if (connected) {
+                statusDisplay.textContent = 'Connected';
+                statusDisplay.className = 'status connected';
+                connectButton.disabled = true;
+                disconnectButton.disabled = false;
+                buttonA.disabled = false;
+                buttonB.disabled = false;
+                buttonC.disabled = false;
+                ledOnButton.disabled = false;
+                ledOffButton.disabled = false;
+                getInfoButton.disabled = false;
+                clearDisplayButton.disabled = false;
+                sendMessageButton.disabled = false;
+                messageInput.disabled = false;
+            } else {
+                statusDisplay.textContent = 'Disconnected';
+                statusDisplay.className = 'status disconnected';
+                connectButton.disabled = false;
+                disconnectButton.disabled = true;
+                buttonA.disabled = true;
+                buttonB.disabled = true;
+                buttonC.disabled = true;
+                ledOnButton.disabled = true;
+                ledOffButton.disabled = true;
+                getInfoButton.disabled = true;
+                clearDisplayButton.disabled = true;
+                sendMessageButton.disabled = true;
+                messageInput.disabled = true;
+            }
+        }
+        
+        // Send data to M5StickC Plus 2
+        async function sendData(data) {
+            if (!rxCharacteristic) {
+                log('No RX characteristic available');
+                return;
+            }
+            
+            try {
+                const encoder = new TextEncoder();
+                const dataBuffer = encoder.encode(data);
+                await rxCharacteristic.writeValue(dataBuffer);
+                log(`Sent: ${data}`);
+            } catch (error) {
+                log(`Error sending data: ${error}`);
+            }
+        }
+        
+        // Handle notifications from the device
+        function handleNotifications(event) {
+            const value = event.target.value;
+            const decoder = new TextDecoder();
+            const text = decoder.decode(value);
+            log(`Received: ${text}`);
+            
+            // If it's a display update message
+            if (text.startsWith('DISPLAY:')) {
+                displayPanel.textContent = text.replace('DISPLAY:', '');
+            }
+        }
+        
+        // Connect to BLE device
+        connectButton.addEventListener('click', async () => {
+            try {
+                log('Requesting Bluetooth device...');
+                device = await navigator.bluetooth.requestDevice({
+                    filters: [{ namePrefix: 'M5Stick' }],
+                    optionalServices: [SERVICE_UUID]
+                });
+                
+                log(`Device selected: ${device.name}`);
+                device.addEventListener('gattserverdisconnected', onDisconnected);
+                
+                log('Connecting to GATT server...');
+                server = await device.gatt.connect();
+                
+                log('Getting primary service...');
+                service = await server.getPrimaryService(SERVICE_UUID);
+                
+                log('Getting characteristics...');
+                rxCharacteristic = await service.getCharacteristic(RX_CHARACTERISTIC_UUID);
+                txCharacteristic = await service.getCharacteristic(TX_CHARACTERISTIC_UUID);
+                
+                log('Starting notifications...');
+                await txCharacteristic.startNotifications();
+                txCharacteristic.addEventListener('characteristicvaluechanged', handleNotifications);
+                
+                updateUI(true);
+                log('Connected successfully');
+                sendData('CONN');  // Notify the device we're connected
+            } catch (error) {
+                log(`Connection error: ${error}`);
+                updateUI(false);
+            }
+        });
+        
+        // Disconnect from BLE device
+        disconnectButton.addEventListener('click', () => {
+            if (device && device.gatt.connected) {
+                device.gatt.disconnect();
+            } else {
+                onDisconnected();
+            }
+        });
+        
+        // Handle disconnection
+        function onDisconnected() {
+            log('Disconnected from device');
+            updateUI(false);
+            
+            if (txCharacteristic) {
+                txCharacteristic.removeEventListener('characteristicvaluechanged', handleNotifications);
+                txCharacteristic = null;
+            }
+            
+            rxCharacteristic = null;
+            service = null;
+            server = null;
+        }
+        
+        // Button event handlers
+        buttonA.addEventListener('click', () => sendData('BUTTON:A'));
+        buttonB.addEventListener('click', () => sendData('BUTTON:B'));
+        buttonC.addEventListener('click', () => sendData('BUTTON:C'));
+        ledOnButton.addEventListener('click', () => sendData('LED:ON'));
+        ledOffButton.addEventListener('click', () => sendData('LED:OFF'));
+        getInfoButton.addEventListener('click', () => sendData('INFO'));
+        clearDisplayButton.addEventListener('click', () => sendData('CLEAR'));
+        
+        sendMessageButton.addEventListener('click', () => {
+            const message = messageInput.value.trim();
+            if (message) {
+                sendData(`TEXT:${message}`);
+                messageInput.value = '';
+            }
+        });
+        
+        messageInput.addEventListener('keypress', (event) => {
+            if (event.key === 'Enter') {
+                sendMessageButton.click();
+            }
+        });
+        
+        // Initialize UI
+        updateUI(false);
+        log('Web BLE Controller ready. Click "Connect via Bluetooth" to begin.');
+    </script>
+</body>
+</html>
